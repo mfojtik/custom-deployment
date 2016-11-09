@@ -54,3 +54,9 @@ described above.
 
 To make sure you're using the local image append `--image-pull-policy=Never` to the `kubectl run`
 commands above.
+
+### TODO
+
+- [ ] Get rid of `pkg/util` (needs to be included in k8s client-go or importable from main k8s without flags compilation errors
+- [ ] Do something useful with Deployments (like add hooks)
+- [ ] Add special annotation to k8s Deployments to ignore the Deployment managed by 3th party controller
