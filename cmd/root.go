@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"k8s.io/client-go/1.5/kubernetes"
+	"k8s.io/client-go/1.5/pkg/api"
 	"k8s.io/client-go/1.5/pkg/util/wait"
 	"k8s.io/client-go/1.5/rest"
 
@@ -44,11 +45,19 @@ var RootCmd = &cobra.Command{
 			log.Fatalf("unable to create new configuration for client: %v", err)
 		}
 
-		informers := controllers.NewSharedInformerFactory(client, 1*time.Second)
+		// Check if we can list deployments in cluster
+		testd, err := client.Deployments(api.NamespaceAll).List(api.ListOptions{})
+		if err != nil {
+			log.Fatalf("error: %v", err)
+		} else {
+			log.Printf("[DEBUG] Can list all %d deployments in cluster", len(testd.Items))
+		}
+
+		informers := controllers.NewSharedInformerFactory(client, 10*time.Minute)
 		informers.Start(wait.NeverStop)
 
 		c := controllers.NewCustomController(informers.Deployments(), informers.ReplicaSets(), client.Extensions())
-		c.Run(1, wait.NeverStop)
+		c.Run(5, wait.NeverStop)
 	},
 }
 

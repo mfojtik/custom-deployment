@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"log"
 	"reflect"
 	"sync"
 	"time"
@@ -23,7 +24,7 @@ type ReplicaSetInformer interface {
 	Lister() *cache.StoreToReplicaSetLister
 }
 
-type SharedInformerFactory struct {
+type sharedInformerFactory struct {
 	client        *kubernetes.Clientset
 	lock          sync.Mutex
 	defaultResync time.Duration
@@ -35,8 +36,8 @@ type SharedInformerFactory struct {
 }
 
 // NewSharedInformerFactory constructs a new instance of sharedInformerFactory
-func NewSharedInformerFactory(client *kubernetes.Clientset, defaultResync time.Duration) *SharedInformerFactory {
-	return &SharedInformerFactory{
+func NewSharedInformerFactory(client *kubernetes.Clientset, defaultResync time.Duration) *sharedInformerFactory {
+	return &sharedInformerFactory{
 		client:           client,
 		defaultResync:    defaultResync,
 		informers:        make(map[reflect.Type]cache.SharedIndexInformer),
@@ -44,7 +45,7 @@ func NewSharedInformerFactory(client *kubernetes.Clientset, defaultResync time.D
 	}
 }
 
-func (s *SharedInformerFactory) Start(stopCh <-chan struct{}) {
+func (s *sharedInformerFactory) Start(stopCh <-chan struct{}) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	for informerType, informer := range s.informers {
@@ -55,16 +56,16 @@ func (s *SharedInformerFactory) Start(stopCh <-chan struct{}) {
 	}
 }
 
-func (f *SharedInformerFactory) Deployments() DeploymentInformer {
-	return &deploymentInformer{SharedInformerFactory: f}
+func (f *sharedInformerFactory) Deployments() DeploymentInformer {
+	return &deploymentInformer{sharedInformerFactory: f}
 }
 
-func (f *SharedInformerFactory) ReplicaSets() ReplicaSetInformer {
-	return &replicaSetInformer{SharedInformerFactory: f}
+func (f *sharedInformerFactory) ReplicaSets() ReplicaSetInformer {
+	return &replicaSetInformer{sharedInformerFactory: f}
 }
 
 type deploymentInformer struct {
-	*SharedInformerFactory
+	*sharedInformerFactory
 }
 
 func (f *deploymentInformer) Informer() cache.SharedIndexInformer {
@@ -79,16 +80,16 @@ func (f *deploymentInformer) Informer() cache.SharedIndexInformer {
 	informer = cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(options api.ListOptions) (runtime.Object, error) {
+				log.Printf("Listing all Deployment in cluster")
 				return f.client.Extensions().Deployments(api.NamespaceAll).List(options)
 			},
 			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+				log.Printf("Watching all Deployments in cluster")
 				return f.client.Extensions().Deployments(api.NamespaceAll).Watch(options)
 			},
 		},
 		&extensions.Deployment{},
-		// TODO remove this.  It is hardcoded so that "Waiting for the second deployment to clear overlapping annotation" in
-		// "overlapping deployment should not fight with each other" will work since it requires a full resync to work properly.
-		30*time.Second,
+		f.defaultResync,
 		cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
 	)
 	f.informers[informerType] = informer
@@ -102,7 +103,7 @@ func (f *deploymentInformer) Lister() *cache.StoreToDeploymentLister {
 }
 
 type replicaSetInformer struct {
-	*SharedInformerFactory
+	*sharedInformerFactory
 }
 
 func (f *replicaSetInformer) Informer() cache.SharedIndexInformer {
@@ -117,9 +118,11 @@ func (f *replicaSetInformer) Informer() cache.SharedIndexInformer {
 	informer = cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(options api.ListOptions) (runtime.Object, error) {
+				log.Printf("Listing all ReplicaSets in cluster")
 				return f.client.Extensions().ReplicaSets(api.NamespaceAll).List(options)
 			},
 			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
+				log.Printf("Watching all ReplicaSets in cluster")
 				return f.client.Extensions().ReplicaSets(api.NamespaceAll).Watch(options)
 			},
 		},

@@ -11,6 +11,11 @@ all: install test
 build:
 	@go build $(GOFLAGS) ./...
 
+docker:
+	mkdir -p _output/bin && \
+	go build $(GOFLAGS) -o _output/bin/custom-deployment main.go && \
+	sudo docker build -t docker.io/mfojtik/custom-deployment:latest .
+
 install:
 	@go get $(GOFLAGS) ./...
 

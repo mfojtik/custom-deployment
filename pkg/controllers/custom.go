@@ -42,12 +42,51 @@ func NewCustomController(dInformer DeploymentInformer, rsInformer ReplicaSetInfo
 	c.deploymentLister = dInformer.Lister()
 	c.replicaSetLister = rsInformer.Lister()
 
+	c.deploymentSynced = dInformer.Informer().HasSynced
+	c.replicaSetSynced = rsInformer.Informer().HasSynced
+
 	return c
 }
 
-func (c *CustomController) addDeploymentNotification(obj interface{})               {}
-func (c *CustomController) updateDeploymentNotification(oldObj, newObj interface{}) {}
-func (c *CustomController) deleteDeploymentNotification(obj interface{})            {}
+func (c *CustomController) addDeploymentNotification(obj interface{}) {
+	d := obj.(*extensions.Deployment)
+	log.Printf("Adding deployment %s", d.Name)
+	c.enqueueDeployment(d)
+}
+
+func (c *CustomController) updateDeploymentNotification(oldObj, newObj interface{}) {
+	oldD := oldObj.(*extensions.Deployment)
+	log.Printf("Updating deployment %s", oldD.Name)
+	c.enqueueDeployment(newObj.(*extensions.Deployment))
+}
+
+func (c *CustomController) deleteDeploymentNotification(obj interface{}) {
+	d, ok := obj.(*extensions.Deployment)
+	if !ok {
+		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+		if !ok {
+			log.Printf("Couldn't get object from tombstone %#v", obj)
+			return
+		}
+		d, ok = tombstone.Obj.(*extensions.Deployment)
+		if !ok {
+			log.Printf("Tombstone contained object that is not a Deployment %#v", obj)
+			return
+		}
+	}
+	log.Printf("Deleting deployment %s", d.Name)
+	c.enqueueDeployment(d)
+}
+
+func (c *CustomController) enqueueDeployment(deployment *extensions.Deployment) {
+	key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(deployment)
+	if err != nil {
+		log.Printf("Couldn't get key for object %#v: %v", deployment, err)
+		return
+	}
+
+	c.queue.Add(key)
+}
 
 func (c *CustomController) Run(threadiness int, stopCh <-chan struct{}) {
 	// don't let panics crash the process
@@ -62,7 +101,10 @@ func (c *CustomController) Run(threadiness int, stopCh <-chan struct{}) {
 		return
 	}
 
+	log.Printf("Caches has been synced, starting workers")
+
 	for i := 0; i < threadiness; i++ {
+		log.Printf("Starting worker %d", i)
 		go wait.Until(c.runWorker, time.Second, stopCh)
 	}
 
@@ -72,7 +114,10 @@ func (c *CustomController) Run(threadiness int, stopCh <-chan struct{}) {
 }
 
 func (c *CustomController) runWorker() {
-	for c.processNextWorkItem() {
+	for {
+		if quit := c.processNextWorkItem(); quit {
+			break
+		}
 	}
 }
 
@@ -86,6 +131,7 @@ func (c *CustomController) processNextWorkItem() bool {
 		defer c.queue.Done(key)
 
 		if err := c.syncDeployment(key.(string)); err != nil {
+			log.Printf("error syncing %v: %v", key, err)
 			utilruntime.HandleError(fmt.Errorf("%v failed with : %v", key, err))
 			c.queue.AddRateLimited(key)
 			return false
