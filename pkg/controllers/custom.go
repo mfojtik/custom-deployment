@@ -5,9 +5,9 @@ import (
 	"log"
 	"time"
 
+	deployutil "github.com/mfojtik/custom-deployment/pkg/util/deployments"
 	"github.com/mfojtik/custom-deployment/pkg/util/workqueue"
 	typed "k8s.io/client-go/1.5/kubernetes/typed/extensions/v1beta1"
-	"k8s.io/client-go/1.5/pkg/api"
 	"k8s.io/client-go/1.5/pkg/apis/extensions/v1beta1"
 	utilruntime "k8s.io/client-go/1.5/pkg/util/runtime"
 	"k8s.io/client-go/1.5/pkg/util/wait"
@@ -28,7 +28,7 @@ type CustomController struct {
 func NewCustomController(dInformer DeploymentInformer, rsInformer ReplicaSetInformer, extClient typed.ExtensionsInterface) *CustomController {
 	c := &CustomController{
 		extensionsClient: extClient,
-		queue:            workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "customdeployment"),
+		queue:            workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "custom-deployment"),
 	}
 
 	dInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -89,40 +89,33 @@ func (c *CustomController) enqueueDeployment(deployment *v1beta1.Deployment) {
 }
 
 func (c *CustomController) Run(threadiness int, stopCh <-chan struct{}) {
-	// don't let panics crash the process
 	defer utilruntime.HandleCrash()
-	// make sure the work queue is shutdown which will trigger workers to end
 	defer c.queue.ShutDown()
-
 	log.Printf("Starting custom deployment controller")
 
-	// wait for your secondary caches to fill before starting your work
-	if !cache.WaitForCacheSync(stopCh, c.deploymentSynced) || !cache.WaitForCacheSync(stopCh, c.replicaSetSynced) {
+	if !cache.WaitForCacheSync(stopCh, c.deploymentSynced) ||
+		!cache.WaitForCacheSync(stopCh, c.replicaSetSynced) {
 		return
 	}
 
-	log.Printf("Caches has been synced, starting workers")
-
 	for i := 0; i < threadiness; i++ {
-		log.Printf("Starting worker %d", i)
-		go wait.Until(c.runWorker, time.Second, stopCh)
+		go wait.Until(c.worker, time.Second, stopCh)
 	}
 
-	// wait until we're told to stop
 	<-stopCh
 	log.Printf("Shutting down custom deployment controller")
 }
 
-func (c *CustomController) runWorker() {
+func (c *CustomController) worker() {
 	for {
-		if quit := c.processNextWorkItem(); quit {
+		if quit := c.process(); quit {
 			break
 		}
 	}
 }
 
 // processNextWorkItem deals with one key off the queue.  It returns false when it's time to quit.
-func (c *CustomController) processNextWorkItem() bool {
+func (c *CustomController) process() bool {
 	work := func() bool {
 		key, quit := c.queue.Get()
 		if quit {
@@ -131,7 +124,6 @@ func (c *CustomController) processNextWorkItem() bool {
 		defer c.queue.Done(key)
 
 		if err := c.syncDeployment(key.(string)); err != nil {
-			log.Printf("error syncing %v: %v", key, err)
 			utilruntime.HandleError(fmt.Errorf("%v failed with : %v", key, err))
 			c.queue.AddRateLimited(key)
 			return false
@@ -164,24 +156,12 @@ func (c *CustomController) syncDeployment(key string) error {
 	}
 
 	deployment := obj.(*v1beta1.Deployment)
-	d, err := deploymentDeepCopy(deployment)
+	d, err := deployutil.DeploymentDeepCopy(deployment)
 	if err != nil {
 		return err
 	}
 
 	log.Printf("Handling deployment %s/%s", d.Namespace, d.Name)
-
+	// Do the work here.
 	return nil
-}
-
-func deploymentDeepCopy(deployment *v1beta1.Deployment) (*v1beta1.Deployment, error) {
-	objCopy, err := api.Scheme.DeepCopy(deployment)
-	if err != nil {
-		return nil, err
-	}
-	copied, ok := objCopy.(*v1beta1.Deployment)
-	if !ok {
-		return nil, fmt.Errorf("expected Deployment, got %#v", objCopy)
-	}
-	return copied, nil
 }

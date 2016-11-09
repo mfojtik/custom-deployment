@@ -8,7 +8,7 @@ import (
 
 	"k8s.io/client-go/1.5/kubernetes"
 	"k8s.io/client-go/1.5/pkg/api"
-	"k8s.io/client-go/1.5/pkg/apis/extensions"
+	"k8s.io/client-go/1.5/pkg/apis/extensions/v1beta1"
 	"k8s.io/client-go/1.5/pkg/runtime"
 	"k8s.io/client-go/1.5/pkg/watch"
 	"k8s.io/client-go/1.5/tools/cache"
@@ -72,7 +72,7 @@ func (f *deploymentInformer) Informer() cache.SharedIndexInformer {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
-	informerType := reflect.TypeOf(&extensions.Deployment{})
+	informerType := reflect.TypeOf(&v1beta1.Deployment{})
 	informer, exists := f.informers[informerType]
 	if exists {
 		return informer
@@ -88,7 +88,7 @@ func (f *deploymentInformer) Informer() cache.SharedIndexInformer {
 				return f.client.Extensions().Deployments(api.NamespaceAll).Watch(options)
 			},
 		},
-		&extensions.Deployment{},
+		&v1beta1.Deployment{},
 		f.defaultResync,
 		cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
 	)
@@ -110,7 +110,7 @@ func (f *replicaSetInformer) Informer() cache.SharedIndexInformer {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
-	informerType := reflect.TypeOf(&extensions.ReplicaSet{})
+	informerType := reflect.TypeOf(&v1beta1.ReplicaSet{})
 	informer, exists := f.informers[informerType]
 	if exists {
 		return informer
@@ -126,7 +126,7 @@ func (f *replicaSetInformer) Informer() cache.SharedIndexInformer {
 				return f.client.Extensions().ReplicaSets(api.NamespaceAll).Watch(options)
 			},
 		},
-		&extensions.ReplicaSet{},
+		&v1beta1.ReplicaSet{},
 		f.defaultResync,
 		cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
 	)

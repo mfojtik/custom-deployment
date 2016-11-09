@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"k8s.io/client-go/1.5/kubernetes"
-	"k8s.io/client-go/1.5/pkg/api"
 	"k8s.io/client-go/1.5/rest"
 
 	"github.com/mfojtik/custom-deployment/pkg/controllers"
@@ -44,13 +43,7 @@ var RootCmd = &cobra.Command{
 			log.Fatalf("unable to create new configuration for client: %v", err)
 		}
 
-		// Check if we can list deployments in cluster
-		testd, err := client.Deployments(api.NamespaceAll).List(api.ListOptions{})
-		if err != nil {
-			log.Fatalf("error: %v", err)
-		} else {
-			log.Printf("[DEBUG] Can list all %d deployments in cluster", len(testd.Items))
-		}
+		// TODO: Add signal handler for SIGINT
 		stopChan := make(chan struct{})
 		informers := controllers.NewSharedInformerFactory(client, 10*time.Minute)
 
