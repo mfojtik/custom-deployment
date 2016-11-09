@@ -22,7 +22,6 @@ import (
 
 	"k8s.io/client-go/1.5/kubernetes"
 	"k8s.io/client-go/1.5/pkg/api"
-	"k8s.io/client-go/1.5/pkg/util/wait"
 	"k8s.io/client-go/1.5/rest"
 
 	"github.com/mfojtik/custom-deployment/pkg/controllers"
@@ -52,12 +51,15 @@ var RootCmd = &cobra.Command{
 		} else {
 			log.Printf("[DEBUG] Can list all %d deployments in cluster", len(testd.Items))
 		}
-
+		stopChan := make(chan struct{})
 		informers := controllers.NewSharedInformerFactory(client, 10*time.Minute)
-		informers.Start(wait.NeverStop)
 
 		c := controllers.NewCustomController(informers.Deployments(), informers.ReplicaSets(), client.Extensions())
-		c.Run(5, wait.NeverStop)
+		go func() {
+			c.Run(5, stopChan)
+		}()
+		informers.Start(stopChan)
+		<-stopChan
 	},
 }
 

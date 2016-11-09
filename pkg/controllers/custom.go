@@ -6,16 +6,16 @@ import (
 	"time"
 
 	"github.com/mfojtik/custom-deployment/pkg/util/workqueue"
-	"k8s.io/client-go/1.5/kubernetes/typed/extensions/v1beta1"
+	typed "k8s.io/client-go/1.5/kubernetes/typed/extensions/v1beta1"
 	"k8s.io/client-go/1.5/pkg/api"
-	"k8s.io/client-go/1.5/pkg/apis/extensions"
+	"k8s.io/client-go/1.5/pkg/apis/extensions/v1beta1"
 	utilruntime "k8s.io/client-go/1.5/pkg/util/runtime"
 	"k8s.io/client-go/1.5/pkg/util/wait"
 	"k8s.io/client-go/1.5/tools/cache"
 )
 
 type CustomController struct {
-	extensionsClient v1beta1.ExtensionsInterface
+	extensionsClient typed.ExtensionsInterface
 	deploymentLister *cache.StoreToDeploymentLister
 	replicaSetLister *cache.StoreToReplicaSetLister
 
@@ -25,7 +25,7 @@ type CustomController struct {
 	queue workqueue.RateLimitingInterface
 }
 
-func NewCustomController(dInformer DeploymentInformer, rsInformer ReplicaSetInformer, extClient v1beta1.ExtensionsInterface) *CustomController {
+func NewCustomController(dInformer DeploymentInformer, rsInformer ReplicaSetInformer, extClient typed.ExtensionsInterface) *CustomController {
 	c := &CustomController{
 		extensionsClient: extClient,
 		queue:            workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "customdeployment"),
@@ -49,26 +49,26 @@ func NewCustomController(dInformer DeploymentInformer, rsInformer ReplicaSetInfo
 }
 
 func (c *CustomController) addDeploymentNotification(obj interface{}) {
-	d := obj.(*extensions.Deployment)
+	d := obj.(*v1beta1.Deployment)
 	log.Printf("Adding deployment %s", d.Name)
 	c.enqueueDeployment(d)
 }
 
 func (c *CustomController) updateDeploymentNotification(oldObj, newObj interface{}) {
-	oldD := oldObj.(*extensions.Deployment)
+	oldD := oldObj.(*v1beta1.Deployment)
 	log.Printf("Updating deployment %s", oldD.Name)
-	c.enqueueDeployment(newObj.(*extensions.Deployment))
+	c.enqueueDeployment(newObj.(*v1beta1.Deployment))
 }
 
 func (c *CustomController) deleteDeploymentNotification(obj interface{}) {
-	d, ok := obj.(*extensions.Deployment)
+	d, ok := obj.(*v1beta1.Deployment)
 	if !ok {
 		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 		if !ok {
 			log.Printf("Couldn't get object from tombstone %#v", obj)
 			return
 		}
-		d, ok = tombstone.Obj.(*extensions.Deployment)
+		d, ok = tombstone.Obj.(*v1beta1.Deployment)
 		if !ok {
 			log.Printf("Tombstone contained object that is not a Deployment %#v", obj)
 			return
@@ -78,7 +78,7 @@ func (c *CustomController) deleteDeploymentNotification(obj interface{}) {
 	c.enqueueDeployment(d)
 }
 
-func (c *CustomController) enqueueDeployment(deployment *extensions.Deployment) {
+func (c *CustomController) enqueueDeployment(deployment *v1beta1.Deployment) {
 	key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(deployment)
 	if err != nil {
 		log.Printf("Couldn't get key for object %#v: %v", deployment, err)
@@ -163,7 +163,7 @@ func (c *CustomController) syncDeployment(key string) error {
 		return nil
 	}
 
-	deployment := obj.(*extensions.Deployment)
+	deployment := obj.(*v1beta1.Deployment)
 	d, err := deploymentDeepCopy(deployment)
 	if err != nil {
 		return err
@@ -174,12 +174,12 @@ func (c *CustomController) syncDeployment(key string) error {
 	return nil
 }
 
-func deploymentDeepCopy(deployment *extensions.Deployment) (*extensions.Deployment, error) {
+func deploymentDeepCopy(deployment *v1beta1.Deployment) (*v1beta1.Deployment, error) {
 	objCopy, err := api.Scheme.DeepCopy(deployment)
 	if err != nil {
 		return nil, err
 	}
-	copied, ok := objCopy.(*extensions.Deployment)
+	copied, ok := objCopy.(*v1beta1.Deployment)
 	if !ok {
 		return nil, fmt.Errorf("expected Deployment, got %#v", objCopy)
 	}
