@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"log"
 	"reflect"
 	"sync"
 	"time"
@@ -29,9 +28,7 @@ type sharedInformerFactory struct {
 	lock          sync.Mutex
 	defaultResync time.Duration
 
-	informers map[reflect.Type]cache.SharedIndexInformer
-	// startedInformers is used for tracking which informers have been started
-	// this allows calling of Start method multiple times
+	informers        map[reflect.Type]cache.SharedIndexInformer
 	startedInformers map[reflect.Type]bool
 }
 
@@ -80,11 +77,9 @@ func (f *deploymentInformer) Informer() cache.SharedIndexInformer {
 	informer = cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(options api.ListOptions) (runtime.Object, error) {
-				log.Printf("Listing all Deployment in cluster")
 				return f.client.Extensions().Deployments(api.NamespaceAll).List(options)
 			},
 			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
-				log.Printf("Watching all Deployments in cluster")
 				return f.client.Extensions().Deployments(api.NamespaceAll).Watch(options)
 			},
 		},
@@ -118,11 +113,9 @@ func (f *replicaSetInformer) Informer() cache.SharedIndexInformer {
 	informer = cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(options api.ListOptions) (runtime.Object, error) {
-				log.Printf("Listing all ReplicaSets in cluster")
 				return f.client.Extensions().ReplicaSets(api.NamespaceAll).List(options)
 			},
 			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
-				log.Printf("Watching all ReplicaSets in cluster")
 				return f.client.Extensions().ReplicaSets(api.NamespaceAll).Watch(options)
 			},
 		},

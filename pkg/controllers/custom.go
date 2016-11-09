@@ -89,9 +89,9 @@ func (c *CustomController) enqueueDeployment(deployment *v1beta1.Deployment) {
 }
 
 func (c *CustomController) Run(threadiness int, stopCh <-chan struct{}) {
+	log.Printf("Starting custom deployment controller")
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
-	log.Printf("Starting custom deployment controller")
 
 	if !cache.WaitForCacheSync(stopCh, c.deploymentSynced) ||
 		!cache.WaitForCacheSync(stopCh, c.replicaSetSynced) {
@@ -123,7 +123,7 @@ func (c *CustomController) process() bool {
 		}
 		defer c.queue.Done(key)
 
-		if err := c.syncDeployment(key.(string)); err != nil {
+		if err := c.handleDeployment(key.(string)); err != nil {
 			utilruntime.HandleError(fmt.Errorf("%v failed with : %v", key, err))
 			c.queue.AddRateLimited(key)
 			return false
@@ -139,7 +139,7 @@ func (c *CustomController) process() bool {
 	}
 }
 
-func (c *CustomController) syncDeployment(key string) error {
+func (c *CustomController) handleDeployment(key string) error {
 	startTime := time.Now()
 	defer func() {
 		log.Printf("Finished syncing deployment %q (%v)", key, time.Now().Sub(startTime))
@@ -162,6 +162,6 @@ func (c *CustomController) syncDeployment(key string) error {
 	}
 
 	log.Printf("Handling deployment %s/%s", d.Namespace, d.Name)
-	// Do the work here.
+	// Do the actual work on deployment here here.
 	return nil
 }
