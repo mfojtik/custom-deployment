@@ -16,14 +16,8 @@ package cmd
 
 import (
 	"fmt"
-	"log"
 	"os"
-	"time"
 
-	"k8s.io/client-go/1.5/kubernetes"
-	"k8s.io/client-go/1.5/rest"
-
-	"github.com/mfojtik/custom-deployment/pkg/controllers"
 	"github.com/spf13/cobra"
 )
 
@@ -33,27 +27,8 @@ var RootCmd = &cobra.Command{
 	Long:  ``,
 	// Uncomment the following line if your bare application
 	// has an action associated with it:
-	Run: func(cmd *cobra.Command, args []string) {
-		config, err := rest.InClusterConfig()
-		if err != nil {
-			log.Fatalf("unable to read in-cluster configuration: %v", err)
-		}
-		client, err := kubernetes.NewForConfig(config)
-		if err != nil {
-			log.Fatalf("unable to create new configuration for client: %v", err)
-		}
-
-		// TODO: Add signal handler for SIGINT
-		stopChan := make(chan struct{})
-		informers := controllers.NewSharedInformerFactory(client, 10*time.Minute)
-
-		c := controllers.NewCustomController(informers.Deployments(), informers.ReplicaSets(), client.Extensions())
-		go func() {
-			c.Run(5, stopChan)
-		}()
-		informers.Start(stopChan)
-		<-stopChan
-	},
+	//Run: func(cmd *cobra.Command, args []string) {
+	//},
 }
 
 func Execute() {

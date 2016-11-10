@@ -13,7 +13,7 @@ build:
 
 image:
 	mkdir -p _output/bin && \
-	go build $(GOFLAGS) -o _output/bin/custom-deployment main.go && \
+	GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -o _output/bin/custom-deployment main.go && \
 	sudo docker build -t docker.io/mfojtik/custom-deployment:latest .
 
 install:

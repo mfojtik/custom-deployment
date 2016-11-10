@@ -28,14 +28,16 @@ type sharedInformerFactory struct {
 	lock          sync.Mutex
 	defaultResync time.Duration
 
+	namespace        string
 	informers        map[reflect.Type]cache.SharedIndexInformer
 	startedInformers map[reflect.Type]bool
 }
 
 // NewSharedInformerFactory constructs a new instance of sharedInformerFactory
-func NewSharedInformerFactory(client *kubernetes.Clientset, defaultResync time.Duration) *sharedInformerFactory {
+func NewSharedInformerFactory(client *kubernetes.Clientset, namespace string, defaultResync time.Duration) *sharedInformerFactory {
 	return &sharedInformerFactory{
 		client:           client,
+		namespace:        namespace,
 		defaultResync:    defaultResync,
 		informers:        make(map[reflect.Type]cache.SharedIndexInformer),
 		startedInformers: make(map[reflect.Type]bool),
@@ -77,10 +79,10 @@ func (f *deploymentInformer) Informer() cache.SharedIndexInformer {
 	informer = cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(options api.ListOptions) (runtime.Object, error) {
-				return f.client.Extensions().Deployments(api.NamespaceAll).List(options)
+				return f.client.Extensions().Deployments(f.namespace).List(options)
 			},
 			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
-				return f.client.Extensions().Deployments(api.NamespaceAll).Watch(options)
+				return f.client.Extensions().Deployments(f.namespace).Watch(options)
 			},
 		},
 		&v1beta1.Deployment{},
@@ -113,10 +115,10 @@ func (f *replicaSetInformer) Informer() cache.SharedIndexInformer {
 	informer = cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(options api.ListOptions) (runtime.Object, error) {
-				return f.client.Extensions().ReplicaSets(api.NamespaceAll).List(options)
+				return f.client.Extensions().ReplicaSets(f.namespace).List(options)
 			},
 			WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
-				return f.client.Extensions().ReplicaSets(api.NamespaceAll).Watch(options)
+				return f.client.Extensions().ReplicaSets(f.namespace).Watch(options)
 			},
 		},
 		&v1beta1.ReplicaSet{},
