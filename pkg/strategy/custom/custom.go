@@ -2,6 +2,7 @@ package custom
 
 import (
 	"fmt"
+	"log"
 	"strconv"
 
 	"github.com/mfojtik/custom-deployment/pkg/informers"
@@ -37,7 +38,15 @@ func NewStrategy(rsInformer informers.ReplicaSetInformer, extClient typed.Extens
 	return strategy
 }
 
-func (s *Strategy) Rollout(newReplicaSet, oldReplicaSet *extensions.ReplicaSet, deployment *extensions.Deployment) error {
+func (s *Strategy) Rollout(deployment *extensions.Deployment) error {
+	newRS, oldRSs, err := s.getAllReplicaSetsAndSyncRevision(deployment, false)
+	if err != nil {
+		return err
+	}
+	//allRSs := append(oldRSs, newRS)
+	activeOldRSs := deploymentutil.FilterActiveReplicaSets(oldRSs)
+	log.Printf("scaling down %#+v", activeOldRSs)
+	log.Printf("scaling up %#+v", newRS)
 	return nil
 }
 
@@ -179,7 +188,18 @@ func (s *Strategy) listDeploymentReplicaSets(deployment *extensions.Deployment) 
 	if err != nil {
 		return nil, err
 	}
-	return s.replicaSetLister.ReplicaSets(deployment.Namespace).List(selector)
+	result, err := s.extClient.ReplicaSets(deployment.Namespace).List(api.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil, err
+	}
+	// TODO: We can't use lister here because it panics as the lister cast the
+	// v1beta.ReplicaSet to internal (but the lister client is external...)
+	out := []extensions.ReplicaSet{}
+	for _, r := range result.Items {
+		internal := conversion.ReplicaSetToInternal(&r)
+		out = append(out, *internal)
+	}
+	return out, nil
 }
 
 func (s *Strategy) listPods(deployment *extensions.Deployment) (*api.PodList, error) {

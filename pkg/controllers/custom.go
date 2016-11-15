@@ -11,6 +11,7 @@ import (
 	deployutil "github.com/mfojtik/custom-deployment/pkg/util/deployments"
 	"github.com/mfojtik/custom-deployment/pkg/util/workqueue"
 	typed "k8s.io/client-go/1.5/kubernetes/typed/extensions/v1beta1"
+	"k8s.io/client-go/1.5/pkg/apis/extensions"
 	"k8s.io/client-go/1.5/pkg/apis/extensions/v1beta1"
 	utilruntime "k8s.io/client-go/1.5/pkg/util/runtime"
 	"k8s.io/client-go/1.5/pkg/util/wait"
@@ -48,11 +49,11 @@ func NewCustomController(dInformer informers.DeploymentInformer, extClient typed
 
 func (c *CustomController) addDeploymentNotification(obj interface{}) {
 	d := obj.(*v1beta1.Deployment)
-	c.enqueueDeployment(d)
+	c.enqueueDeployment(conversion.DeploymentToInternal(d))
 }
 
 func (c *CustomController) updateDeploymentNotification(_, newObj interface{}) {
-	c.enqueueDeployment(newObj.(*v1beta1.Deployment))
+	c.enqueueDeployment(conversion.DeploymentToInternal(newObj.(*v1beta1.Deployment)))
 }
 
 func (c *CustomController) deleteDeploymentNotification(obj interface{}) {
@@ -67,10 +68,10 @@ func (c *CustomController) deleteDeploymentNotification(obj interface{}) {
 			return
 		}
 	}
-	c.enqueueDeployment(d)
+	c.enqueueDeployment(conversion.DeploymentToInternal(d))
 }
 
-func (c *CustomController) enqueueDeployment(deployment *v1beta1.Deployment) {
+func (c *CustomController) enqueueDeployment(deployment *extensions.Deployment) {
 	key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(deployment)
 	if err != nil {
 		log.Printf("Couldn't get key for object %#v: %v", deployment, err)
@@ -149,5 +150,5 @@ func (c *CustomController) handleDeployment(key string) error {
 	}
 
 	log.Printf("Executing custom strategy rollout for deployment %s/%s", d.Namespace, d.Name)
-	return c.strategy.Rollout(nil, nil, nil)
+	return c.strategy.Rollout(d)
 }

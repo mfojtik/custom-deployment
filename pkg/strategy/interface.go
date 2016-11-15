@@ -5,5 +5,5 @@ import (
 )
 
 type Interface interface {
-	Rollout(newReplicaSet, oldReplicaSet *extensions.ReplicaSet, deployment *extensions.Deployment) error
+	Rollout(deployment *extensions.Deployment) error
 }
