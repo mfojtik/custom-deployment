@@ -21,16 +21,17 @@ import (
 	"hash/adler32"
 	"time"
 
+	"k8s.io/client-go/1.5/pkg/api"
 	"k8s.io/client-go/1.5/pkg/api/errors"
-	"k8s.io/client-go/1.5/pkg/api/v1"
 
+	"github.com/mfojtik/custom-deployment/pkg/util/conversion"
 	hashutil "github.com/mfojtik/custom-deployment/pkg/util/hash"
 	typed "k8s.io/client-go/1.5/kubernetes/typed/core/v1"
 	errorsutil "k8s.io/client-go/1.5/pkg/util/errors"
 	"k8s.io/client-go/1.5/pkg/util/wait"
 )
 
-func GetPodTemplateSpecHash(template v1.PodTemplateSpec) uint32 {
+func GetPodTemplateSpecHash(template api.PodTemplateSpec) uint32 {
 	podTemplateSpecHasher := adler32.New()
 	hashutil.DeepHashObject(podTemplateSpecHasher, template)
 	return podTemplateSpecHasher.Sum32()
@@ -38,27 +39,29 @@ func GetPodTemplateSpecHash(template v1.PodTemplateSpec) uint32 {
 
 // TODO: use client library instead when it starts to support update retries
 //       see https://github.com/kubernetes/kubernetes/issues/21479
-type updatePodFunc func(pod *v1.Pod) error
+type updatePodFunc func(pod *api.Pod) error
 
 // UpdatePodWithRetries updates a pod with given applyUpdate function. Note that pod not found error is ignored.
 // The returned bool value can be used to tell if the pod is actually updated.
-func UpdatePodWithRetries(podClient typed.PodInterface, pod *v1.Pod, applyUpdate updatePodFunc) (*v1.Pod, bool, error) {
+func UpdatePodWithRetries(podClient typed.PodInterface, pod *api.Pod, applyUpdate updatePodFunc) (*api.Pod, bool, error) {
 	var err error
 	var podUpdated bool
 	oldPod := pod
 	if err = wait.Poll(10*time.Millisecond, 1*time.Minute, func() (bool, error) {
-		pod, err = podClient.Get(oldPod.Name)
+		versionedPod, err := podClient.Get(oldPod.Name)
 		if err != nil {
 			return false, err
 		}
+		pod = conversion.PodToInternal(versionedPod)
 		// Apply the update, then attempt to push it to the apiserver.
 		if err = applyUpdate(pod); err != nil {
 			return false, err
 		}
-		if pod, err = podClient.Update(pod); err == nil {
+		if versionedPod, err = podClient.Update(conversion.PodToVersioned(pod)); err == nil {
 			// Update successful.
 			return true, nil
 		}
+		pod = conversion.PodToInternal(versionedPod)
 		// TODO: don't retry on perm-failed errors and handle them gracefully
 		// Update could have failed due to conflict error. Try again.
 		return false, nil
@@ -86,8 +89,8 @@ func UpdatePodWithRetries(podClient typed.PodInterface, pod *v1.Pod, applyUpdate
 }
 
 // Filter uses the input function f to filter the given pod list, and return the filtered pods
-func Filter(podList *v1.PodList, f func(v1.Pod) bool) []v1.Pod {
-	pods := make([]v1.Pod, 0)
+func Filter(podList *api.PodList, f func(api.Pod) bool) []api.Pod {
+	pods := make([]api.Pod, 0)
 	for _, p := range podList.Items {
 		if f(p) {
 			pods = append(pods, p)

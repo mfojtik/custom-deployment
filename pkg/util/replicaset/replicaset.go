@@ -20,13 +20,13 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mfojtik/custom-deployment/pkg/util/conversion"
 	podutil "github.com/mfojtik/custom-deployment/pkg/util/pod"
 	typed "k8s.io/client-go/1.5/kubernetes/typed/extensions/v1beta1"
+	"k8s.io/client-go/1.5/pkg/api"
 	"k8s.io/client-go/1.5/pkg/api/errors"
 	"k8s.io/client-go/1.5/pkg/api/unversioned"
-	"k8s.io/client-go/1.5/pkg/api/v1"
 	"k8s.io/client-go/1.5/pkg/apis/extensions"
-	"k8s.io/client-go/1.5/pkg/apis/extensions/v1beta1"
 	"k8s.io/client-go/1.5/pkg/labels"
 	errorsutil "k8s.io/client-go/1.5/pkg/util/errors"
 	labelsutil "k8s.io/client-go/1.5/pkg/util/labels"
@@ -35,27 +35,29 @@ import (
 
 // TODO: use client library instead when it starts to support update retries
 //       see https://github.com/kubernetes/kubernetes/issues/21479
-type updateRSFunc func(rs *v1beta1.ReplicaSet) error
+type updateRSFunc func(rs *extensions.ReplicaSet) error
 
 // UpdateRSWithRetries updates a RS with given applyUpdate function. Note that RS not found error is ignored.
 // The returned bool value can be used to tell if the RS is actually updated.
-func UpdateRSWithRetries(rsClient typed.ReplicaSetInterface, rs *v1beta1.ReplicaSet, applyUpdate updateRSFunc) (*v1beta1.ReplicaSet, bool, error) {
+func UpdateRSWithRetries(rsClient typed.ReplicaSetInterface, rs *extensions.ReplicaSet, applyUpdate updateRSFunc) (*extensions.ReplicaSet, bool, error) {
 	var err error
 	var rsUpdated bool
 	oldRs := rs
 	if err = wait.Poll(10*time.Millisecond, 1*time.Minute, func() (bool, error) {
-		rs, err = rsClient.Get(oldRs.Name)
+		versionedRs, err := rsClient.Get(oldRs.Name)
 		if err != nil {
 			return false, err
 		}
+		rs = conversion.ReplicaSetToInternal(versionedRs)
 		// Apply the update, then attempt to push it to the apiserver.
 		if err = applyUpdate(rs); err != nil {
 			return false, err
 		}
-		if rs, err = rsClient.Update(rs); err == nil {
+		if versionedRs, err = rsClient.Update(conversion.ReplicaSetToExternal(rs)); err == nil {
 			// Update successful.
 			return true, nil
 		}
+		rs = conversion.ReplicaSetToInternal(versionedRs)
 		// TODO: don't retry on perm-failed errors and handle them gracefully
 		// Update could have failed due to conflict error. Try again.
 		return false, nil
@@ -83,17 +85,17 @@ func UpdateRSWithRetries(rsClient typed.ReplicaSetInterface, rs *v1beta1.Replica
 }
 
 // GetPodTemplateSpecHash returns the pod template hash of a ReplicaSet's pod template space
-func GetPodTemplateSpecHash(rs *v1beta1.ReplicaSet) string {
+func GetPodTemplateSpecHash(rs *extensions.ReplicaSet) string {
 	meta := rs.Spec.Template.ObjectMeta
 	meta.Labels = labelsutil.CloneAndRemoveLabel(meta.Labels, extensions.DefaultDeploymentUniqueLabelKey)
-	return fmt.Sprintf("%d", podutil.GetPodTemplateSpecHash(v1.PodTemplateSpec{
+	return fmt.Sprintf("%d", podutil.GetPodTemplateSpecHash(api.PodTemplateSpec{
 		ObjectMeta: meta,
 		Spec:       rs.Spec.Template.Spec,
 	}))
 }
 
 // MatchingPodsFunc returns a filter function for pods with matching labels
-func MatchingPodsFunc(rs *v1beta1.ReplicaSet) (func(v1.Pod) bool, error) {
+func MatchingPodsFunc(rs *extensions.ReplicaSet) (func(api.Pod) bool, error) {
 	if rs == nil {
 		return nil, nil
 	}
@@ -101,7 +103,7 @@ func MatchingPodsFunc(rs *v1beta1.ReplicaSet) (func(v1.Pod) bool, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid label selector: %v", err)
 	}
-	return func(pod v1.Pod) bool {
+	return func(pod api.Pod) bool {
 		podLabelsSelector := labels.Set(pod.ObjectMeta.Labels)
 		return selector.Matches(podLabelsSelector)
 	}, nil

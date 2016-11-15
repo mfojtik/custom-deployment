@@ -7,6 +7,7 @@ import (
 
 	"github.com/mfojtik/custom-deployment/pkg/informers"
 	"github.com/mfojtik/custom-deployment/pkg/strategy"
+	"github.com/mfojtik/custom-deployment/pkg/util/conversion"
 	deployutil "github.com/mfojtik/custom-deployment/pkg/util/deployments"
 	"github.com/mfojtik/custom-deployment/pkg/util/workqueue"
 	typed "k8s.io/client-go/1.5/kubernetes/typed/extensions/v1beta1"
@@ -50,8 +51,7 @@ func (c *CustomController) addDeploymentNotification(obj interface{}) {
 	c.enqueueDeployment(d)
 }
 
-func (c *CustomController) updateDeploymentNotification(oldObj, newObj interface{}) {
-	oldD := oldObj.(*v1beta1.Deployment)
+func (c *CustomController) updateDeploymentNotification(_, newObj interface{}) {
 	c.enqueueDeployment(newObj.(*v1beta1.Deployment))
 }
 
@@ -70,14 +70,6 @@ func (c *CustomController) deleteDeploymentNotification(obj interface{}) {
 	c.enqueueDeployment(d)
 }
 
-// addReplicaSet enqueues the deployment that manages a ReplicaSet when the ReplicaSet is created.
-func (c *CustomController) addReplicaSet(obj interface{}) {
-	rs := obj.(*v1beta1.ReplicaSet)
-	if d := c.getDeploymentForReplicaSet(rs); d != nil {
-		c.enqueueDeployment(d)
-	}
-}
-
 func (c *CustomController) enqueueDeployment(deployment *v1beta1.Deployment) {
 	key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(deployment)
 	if err != nil {
@@ -93,8 +85,7 @@ func (c *CustomController) Run(threadiness int, stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
 
-	if !cache.WaitForCacheSync(stopCh, c.deploymentSynced) ||
-		!cache.WaitForCacheSync(stopCh, c.replicaSetSynced) {
+	if !cache.WaitForCacheSync(stopCh, c.deploymentSynced) {
 		return
 	}
 
@@ -152,11 +143,11 @@ func (c *CustomController) handleDeployment(key string) error {
 	}
 
 	deployment := obj.(*v1beta1.Deployment)
-	d, err := deployutil.DeploymentDeepCopy(deployment)
+	d, err := deployutil.DeploymentDeepCopy(conversion.DeploymentToInternal(deployment))
 	if err != nil {
 		return err
 	}
 
 	log.Printf("Executing custom strategy rollout for deployment %s/%s", d.Namespace, d.Name)
-	return c.strategy.Rollout()
+	return c.strategy.Rollout(nil, nil, nil)
 }

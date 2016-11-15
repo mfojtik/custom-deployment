@@ -2,16 +2,21 @@ package custom
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/mfojtik/custom-deployment/pkg/informers"
+	"github.com/mfojtik/custom-deployment/pkg/util/conversion"
 	deploymentutil "github.com/mfojtik/custom-deployment/pkg/util/deployments"
+	podutil "github.com/mfojtik/custom-deployment/pkg/util/pod"
 	rsutil "github.com/mfojtik/custom-deployment/pkg/util/replicaset"
 	typedCore "k8s.io/client-go/1.5/kubernetes/typed/core/v1"
 	typed "k8s.io/client-go/1.5/kubernetes/typed/extensions/v1beta1"
 	"k8s.io/client-go/1.5/pkg/api"
+	"k8s.io/client-go/1.5/pkg/api/errors"
 	"k8s.io/client-go/1.5/pkg/api/unversioned"
+	"k8s.io/client-go/1.5/pkg/api/v1"
 	"k8s.io/client-go/1.5/pkg/apis/extensions"
-	"k8s.io/client-go/1.5/pkg/apis/extensions/v1beta1"
+	utilerrors "k8s.io/client-go/1.5/pkg/util/errors"
 	labelsutil "k8s.io/client-go/1.5/pkg/util/labels"
 	"k8s.io/client-go/1.5/tools/cache"
 )
@@ -32,12 +37,31 @@ func NewStrategy(rsInformer informers.ReplicaSetInformer, extClient typed.Extens
 	return strategy
 }
 
-func (s *Strategy) Rollout(newReplicaSet, oldReplicaSet *v1beta1.ReplicaSet, deployment *v1beta1.Deployment) error {
+func (s *Strategy) Rollout(newReplicaSet, oldReplicaSet *extensions.ReplicaSet, deployment *extensions.Deployment) error {
 	return nil
 }
 
+func (s *Strategy) getAllReplicaSetsAndSyncRevision(deployment *extensions.Deployment, createIfNotExisted bool) (*extensions.ReplicaSet, []*extensions.ReplicaSet, error) {
+	rsList, podList, err := s.rsAndPodsWithHashKeySynced(deployment)
+	if err != nil {
+		return nil, nil, fmt.Errorf("error labeling replica sets and pods with pod-template-hash: %v", err)
+	}
+	_, allOldRSs, err := deploymentutil.FindOldReplicaSets(deployment, rsList, podList)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Get new replica set with the updated revision number
+	newRS, err := s.getNewReplicaSet(deployment, rsList, allOldRSs, createIfNotExisted)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return newRS, allOldRSs, nil
+}
+
 func (s *Strategy) rsAndPodsWithHashKeySynced(deployment *extensions.Deployment) ([]*extensions.ReplicaSet, *api.PodList, error) {
-	rsList, err := listDeploymentReplicaSets(deployment)
+	rsList, err := s.listDeploymentReplicaSets(deployment)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -46,13 +70,13 @@ func (s *Strategy) rsAndPodsWithHashKeySynced(deployment *extensions.Deployment)
 		// Add pod-template-hash information if it's not in the RS.
 		// Otherwise, new RS produced by Deployment will overlap with pre-existing ones
 		// that aren't constrained by the pod-template-hash.
-		syncedRS, err := s.addHashKeyToRSAndPods(rs)
+		syncedRS, err := s.addHashKeyToRSAndPods(&rs)
 		if err != nil {
 			return nil, nil, err
 		}
 		syncedRSList = append(syncedRSList, syncedRS)
 	}
-	syncedPodList, err := dc.listPods(deployment)
+	syncedPodList, err := s.listPods(deployment)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -67,7 +91,7 @@ func (s *Strategy) addHashKeyToRSAndPods(rs *extensions.ReplicaSet) (updatedRS *
 	updatedRS = objCopy.(*extensions.ReplicaSet)
 
 	// If the rs already has the new hash label in its selector, it's done syncing
-	if labelsutil.SelectorHasLabel(rs.Spec.Selector, extensions.DefaultDeploymentUniqueLabelKey) {
+	if labelsutil.SelectorHasLabel(&unversioned.LabelSelector{MatchLabels: rs.Spec.Selector.MatchLabels}, extensions.DefaultDeploymentUniqueLabelKey) {
 		return
 	}
 	namespace := rs.Namespace
@@ -99,22 +123,22 @@ func (s *Strategy) addHashKeyToRSAndPods(rs *extensions.ReplicaSet) (updatedRS *
 	}
 
 	// 2. Update all pods managed by the rs to have the new hash label, so they will be correctly adopted.
-	selector, err := unversioned.LabelSelectorAsSelector(updatedRS.Spec.Selector)
+	selector, err := unversioned.LabelSelectorAsSelector(&unversioned.LabelSelector{MatchLabels: updatedRS.Spec.Selector.MatchLabels})
 	if err != nil {
 		return nil, fmt.Errorf("error in converting selector to label selector for replica set %s: %s", updatedRS.Name, err)
 	}
 	options := api.ListOptions{LabelSelector: selector}
 	// TODO: Replace with lister
-	pods, err := s.coreClient.Pods(namespace).List(options.LabelSelector)
+	externalPodList, err := s.coreClient.Pods(namespace).List(options)
 	if err != nil {
 		return nil, fmt.Errorf("error in getting pod list for namespace %s and list options %+v: %s", namespace, options, err)
 	}
-	podList := api.PodList{Items: make([]api.Pod, 0, len(pods))}
-	for i := range pods {
-		podList.Items = append(podList.Items, *pods[i])
+	podList := &api.PodList{}
+	if err := v1.Convert_v1_PodList_To_api_PodList(externalPodList, podList, nil); err != nil {
+		return nil, err
 	}
 	allPodsLabeled := false
-	if allPodsLabeled, err = deploymentutil.LabelPodsWithHash(&podList, updatedRS, s.coreClient, namespace, hash); err != nil {
+	if allPodsLabeled, err = deploymentutil.LabelPodsWithHash(podList, updatedRS, s.coreClient, namespace, hash); err != nil {
 		return nil, fmt.Errorf("error in adding template hash label %s to pods %+v: %s", hash, podList, err)
 	}
 	// If not all pods are labeled but didn't return error in step 2, we've hit at least one pod not found error.
@@ -128,7 +152,7 @@ func (s *Strategy) addHashKeyToRSAndPods(rs *extensions.ReplicaSet) (updatedRS *
 	// WaitForReplicaSetUpdated, the replicaset controller should have dropped
 	// FullyLabeledReplicas to 0 already, we only need to wait it to increase
 	// back to the number of replicas in the spec.
-	if err = deploymentutil.WaitForPodsHashPopulated(s.coreClient, updatedRS.Generation, namespace, updatedRS.Name); err != nil {
+	if err = deploymentutil.WaitForPodsHashPopulated(s.extClient, updatedRS.Generation, namespace, updatedRS.Name); err != nil {
 		return nil, fmt.Errorf("%s %s/%s: error waiting for replicaset controller to observe pods being labeled with template hash: %v", updatedRS.Kind, updatedRS.Namespace, updatedRS.Name, err)
 	}
 
@@ -150,12 +174,122 @@ func (s *Strategy) addHashKeyToRSAndPods(rs *extensions.ReplicaSet) (updatedRS *
 	return updatedRS, nil
 }
 
-func (s *Strategy) listDeploymentReplicaSets(deployment *v1beta1.Deployment) ([]*extensions.ReplicaSet, error) {
+func (s *Strategy) listDeploymentReplicaSets(deployment *extensions.Deployment) ([]extensions.ReplicaSet, error) {
+	selector, err := unversioned.LabelSelectorAsSelector(&unversioned.LabelSelector{MatchLabels: deployment.Spec.Selector.MatchLabels})
+	if err != nil {
+		return nil, err
+	}
+	return s.replicaSetLister.ReplicaSets(deployment.Namespace).List(selector)
+}
+
+func (s *Strategy) listPods(deployment *extensions.Deployment) (*api.PodList, error) {
 	selector, err := unversioned.LabelSelectorAsSelector(deployment.Spec.Selector)
 	if err != nil {
 		return nil, err
 	}
-	return s.replicaSetLister.ReplicaSets(deployment.Namespace).List(api.ListOptions{
+
+	externalPodList, err := s.coreClient.Pods(deployment.Namespace).List(api.ListOptions{
 		LabelSelector: selector,
 	})
+	if err != nil {
+		return nil, err
+	}
+	podList := &api.PodList{}
+	if err := v1.Convert_v1_PodList_To_api_PodList(externalPodList, podList, nil); err != nil {
+		return nil, err
+	}
+	return podList, nil
+}
+
+// Returns a replica set that matches the intent of the given deployment. Returns nil if the new replica set doesn't exist yet.
+// 1. Get existing new RS (the RS that the given deployment targets, whose pod template is the same as deployment's).
+// 2. If there's existing new RS, update its revision number if it's smaller than (maxOldRevision + 1), where maxOldRevision is the max revision number among all old RSes.
+// 3. If there's no existing new RS and createIfNotExisted is true, create one with appropriate revision number (maxOldRevision + 1) and replicas.
+// Note that the pod-template-hash will be added to adopted RSes and pods.
+func (s *Strategy) getNewReplicaSet(deployment *extensions.Deployment, rsList, oldRSs []*extensions.ReplicaSet, createIfNotExisted bool) (*extensions.ReplicaSet, error) {
+	existingNewRS, err := deploymentutil.FindNewReplicaSet(deployment, rsList)
+	if err != nil {
+		return nil, err
+	}
+
+	// Calculate the max revision number among all old RSes
+	maxOldRevision := deploymentutil.MaxRevision(oldRSs)
+	// Calculate revision number for this new replica set
+	newRevision := strconv.FormatInt(maxOldRevision+1, 10)
+
+	// Latest replica set exists. We need to sync its annotations (includes copying all but
+	// annotationsToSkip from the parent deployment, and update revision, desiredReplicas,
+	// and maxReplicas) and also update the revision annotation in the deployment with the
+	// latest revision.
+	if existingNewRS != nil {
+		objCopy, err := api.Scheme.Copy(existingNewRS)
+		if err != nil {
+			return nil, err
+		}
+		rsCopy := objCopy.(*extensions.ReplicaSet)
+
+		// Set existing new replica set's annotation
+		annotationsUpdated := deploymentutil.SetNewReplicaSetAnnotations(deployment, rsCopy, newRevision, true)
+		if annotationsUpdated {
+			result, err := s.extClient.ReplicaSets(rsCopy.ObjectMeta.Namespace).Update(conversion.ReplicaSetToExternal(rsCopy))
+			return conversion.ReplicaSetToInternal(result), err
+		}
+
+		updateConditions := deploymentutil.SetDeploymentRevision(deployment, newRevision)
+		// If no other Progressing condition has been recorded and we need to estimate the progress
+		// of this deployment then it is likely that old users started caring about progress. In that
+		// case we need to take into account the first time we noticed their new replica set.
+		if updateConditions {
+			if _, err = s.extClient.Deployments(deployment.Namespace).UpdateStatus(conversion.DeploymentToExternal(deployment)); err != nil {
+				return nil, err
+			}
+		}
+		return rsCopy, nil
+	}
+
+	if !createIfNotExisted {
+		return nil, nil
+	}
+
+	// new ReplicaSet does not exist, create one.
+	namespace := deployment.Namespace
+	podTemplateSpecHash := podutil.GetPodTemplateSpecHash(deployment.Spec.Template)
+	newRSTemplate := deploymentutil.GetNewReplicaSetTemplate(deployment)
+	// Add podTemplateHash label to selector.
+	newRSSelector := labelsutil.CloneSelectorAndAddLabel(deployment.Spec.Selector, extensions.DefaultDeploymentUniqueLabelKey, podTemplateSpecHash)
+
+	// Create new ReplicaSet
+	newRS := extensions.ReplicaSet{
+		ObjectMeta: api.ObjectMeta{
+			// Make the name deterministic, to ensure idempotence
+			Name:      deployment.Name + "-" + fmt.Sprintf("%d", podTemplateSpecHash),
+			Namespace: namespace,
+		},
+		Spec: extensions.ReplicaSetSpec{
+			Replicas: 0,
+			Selector: newRSSelector,
+			Template: newRSTemplate,
+		},
+	}
+	allRSs := append(oldRSs, &newRS)
+	newReplicasCount, err := deploymentutil.NewRSNewReplicas(deployment, allRSs, &newRS)
+	if err != nil {
+		return nil, err
+	}
+
+	newRS.Spec.Replicas = newReplicasCount
+	// Set new replica set's annotation
+	deploymentutil.SetNewReplicaSetAnnotations(deployment, &newRS, newRevision, false)
+	createdRS, err := s.extClient.ReplicaSets(namespace).Create(conversion.ReplicaSetToExternal(&newRS))
+	switch {
+	// We may end up hitting this due to a slow cache or a fast resync of the deployment.
+	case errors.IsAlreadyExists(err):
+		return s.replicaSetLister.ReplicaSets(namespace).Get(newRS.Name)
+	case err != nil:
+		return nil, err
+	}
+
+	deploymentutil.SetDeploymentRevision(deployment, newRevision)
+	_, err = s.extClient.Deployments(deployment.Namespace).UpdateStatus(conversion.DeploymentToExternal(deployment))
+	return conversion.ReplicaSetToInternal(createdRS), err
 }
