@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/mfojtik/custom-deployment/pkg/controllers"
+	"github.com/mfojtik/custom-deployment/pkg/informers"
+	"github.com/mfojtik/custom-deployment/pkg/strategy/custom"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/1.5/kubernetes"
 	"k8s.io/client-go/1.5/rest"
@@ -56,13 +58,14 @@ manage Deployments and ReplicaSets.
 
 		// TODO: Add signal handler for SIGINT
 		stopChan := make(chan struct{})
-		informers := controllers.NewSharedInformerFactory(client, startOptions.Namespace, time.Duration(startOptions.DefaultResync)*time.Minute)
+		sharedInformer := informers.NewSharedInformerFactory(client, startOptions.Namespace, time.Duration(startOptions.DefaultResync)*time.Minute)
+		strategy := custom.NewStrategy(sharedInformer.ReplicaSets(), client.Extensions(), client.Core())
 
-		c := controllers.NewCustomController(informers.Deployments(), informers.ReplicaSets(), client.Extensions())
+		c := controllers.NewCustomController(sharedInformer.Deployments(), client.Extensions(), strategy)
 		go func() {
 			c.Run(startOptions.Workers, stopChan)
 		}()
-		informers.Start(stopChan)
+		sharedInformer.Start(stopChan)
 		<-stopChan
 	},
 }

@@ -5,6 +5,8 @@ import (
 	"log"
 	"time"
 
+	"github.com/mfojtik/custom-deployment/pkg/informers"
+	"github.com/mfojtik/custom-deployment/pkg/strategy"
 	deployutil "github.com/mfojtik/custom-deployment/pkg/util/deployments"
 	"github.com/mfojtik/custom-deployment/pkg/util/workqueue"
 	typed "k8s.io/client-go/1.5/kubernetes/typed/extensions/v1beta1"
@@ -16,19 +18,19 @@ import (
 
 type CustomController struct {
 	extensionsClient typed.ExtensionsInterface
+
 	deploymentLister *cache.StoreToDeploymentLister
-	replicaSetLister *cache.StoreToReplicaSetLister
-
 	deploymentSynced cache.InformerSynced
-	replicaSetSynced cache.InformerSynced
 
-	queue workqueue.RateLimitingInterface
+	strategy strategy.Interface
+	queue    workqueue.RateLimitingInterface
 }
 
-func NewCustomController(dInformer DeploymentInformer, rsInformer ReplicaSetInformer, extClient typed.ExtensionsInterface) *CustomController {
+func NewCustomController(dInformer informers.DeploymentInformer, extClient typed.ExtensionsInterface, strategy strategy.Interface) *CustomController {
 	c := &CustomController{
 		extensionsClient: extClient,
 		queue:            workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "custom-deployment"),
+		strategy:         strategy,
 	}
 
 	dInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -37,26 +39,19 @@ func NewCustomController(dInformer DeploymentInformer, rsInformer ReplicaSetInfo
 		DeleteFunc: c.deleteDeploymentNotification,
 	})
 
-	rsInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{})
-
 	c.deploymentLister = dInformer.Lister()
-	c.replicaSetLister = rsInformer.Lister()
-
 	c.deploymentSynced = dInformer.Informer().HasSynced
-	c.replicaSetSynced = rsInformer.Informer().HasSynced
 
 	return c
 }
 
 func (c *CustomController) addDeploymentNotification(obj interface{}) {
 	d := obj.(*v1beta1.Deployment)
-	log.Printf("Adding deployment %s", d.Name)
 	c.enqueueDeployment(d)
 }
 
 func (c *CustomController) updateDeploymentNotification(oldObj, newObj interface{}) {
 	oldD := oldObj.(*v1beta1.Deployment)
-	log.Printf("Updating deployment %s", oldD.Name)
 	c.enqueueDeployment(newObj.(*v1beta1.Deployment))
 }
 
@@ -65,17 +60,22 @@ func (c *CustomController) deleteDeploymentNotification(obj interface{}) {
 	if !ok {
 		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 		if !ok {
-			log.Printf("Couldn't get object from tombstone %#v", obj)
 			return
 		}
 		d, ok = tombstone.Obj.(*v1beta1.Deployment)
 		if !ok {
-			log.Printf("Tombstone contained object that is not a Deployment %#v", obj)
 			return
 		}
 	}
-	log.Printf("Deleting deployment %s", d.Name)
 	c.enqueueDeployment(d)
+}
+
+// addReplicaSet enqueues the deployment that manages a ReplicaSet when the ReplicaSet is created.
+func (c *CustomController) addReplicaSet(obj interface{}) {
+	rs := obj.(*v1beta1.ReplicaSet)
+	if d := c.getDeploymentForReplicaSet(rs); d != nil {
+		c.enqueueDeployment(d)
+	}
 }
 
 func (c *CustomController) enqueueDeployment(deployment *v1beta1.Deployment) {
@@ -89,7 +89,7 @@ func (c *CustomController) enqueueDeployment(deployment *v1beta1.Deployment) {
 }
 
 func (c *CustomController) Run(threadiness int, stopCh <-chan struct{}) {
-	log.Printf("Starting custom deployment controller")
+	log.Printf("Starting custom deployment strategy controller")
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
 
@@ -103,7 +103,7 @@ func (c *CustomController) Run(threadiness int, stopCh <-chan struct{}) {
 	}
 
 	<-stopCh
-	log.Printf("Shutting down custom deployment controller")
+	log.Printf("Shutting down custom deployment strategy controller")
 }
 
 func (c *CustomController) worker() {
@@ -140,16 +140,12 @@ func (c *CustomController) process() bool {
 }
 
 func (c *CustomController) handleDeployment(key string) error {
-	startTime := time.Now()
-	defer func() {
-		log.Printf("Finished syncing deployment %q (%v)", key, time.Now().Sub(startTime))
-	}()
-
 	obj, exists, err := c.deploymentLister.Indexer.GetByKey(key)
 	if err != nil {
 		log.Printf("Unable to retrieve deployment %v from store: %v", key, err)
 		return err
 	}
+
 	if !exists {
 		log.Printf("Deployment has been deleted %v", key)
 		return nil
@@ -161,7 +157,6 @@ func (c *CustomController) handleDeployment(key string) error {
 		return err
 	}
 
-	log.Printf("Handling deployment %s/%s", d.Namespace, d.Name)
-	// Do the actual work on deployment here here.
-	return nil
+	log.Printf("Executing custom strategy rollout for deployment %s/%s", d.Namespace, d.Name)
+	return c.strategy.Rollout()
 }
